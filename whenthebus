@@ -1,0 +1,619 @@
+#!/bin/bash
+
+# whenthebus
+#
+# This script reports upcoming bus arrivals.  Naturally, it uses data
+# provided by the MBTA to do so.  The script is intended to be run
+# from the linux command line, or as a CGI script.  In the latter
+# case, it should be run in a _very_ secure environment -- it hasn't
+# itself been written with security in mind.  See below for more
+# information on this.
+# 
+# The script serves a special purpose:  it lets you configure several
+# bus routes you're interested in, and several bus stops that you're
+# interested in, and it will tell you about the upcoming arrivals of
+# any of your chosen buses at any of your chosen stops.  In my
+# neighborhood there are 5 or 6 nearby stops, served by 4 different
+# bus routes.  Since they will all take me into town (either to
+# Alewife, or Harvard Square), I usually want to walk to the stop that
+# will get me their soonest.  Similarly, if I'm already in town and
+# want to go home, the script tells me when any my preferred buses
+# will be leaving from either Harvard Square or Alewife.
+#
+# Arrival data may come from either the published bus schedule, or
+# from the MBTA's real-time prediction data.  If a bus isn't yet
+# running, or if its real-time data isn't available for some reason,
+# the scheduled arrival is shown instead, and noted as such.
+# 
+# To configure the script for your own neighborhood and needs, you'll
+# need to specify the bus route numbers, and the numbers and names of
+# the stops you're interested in.  
+#
+#
+# These four variables configure the bus routes and bus stops that
+# you're interested in:
+
+inbound_routes="78 62 76 84"
+inbound_stops="2361 6217 6218 2326 2331"
+outbound_routes="78 62 76 84 77"
+outbound_stops="20761 141 2271 2277 2283"
+
+# The values of "inbound_routes" and "outbound_routes" are obvious. 
+# Finding the inbound/outbound stop numbers is a little trickier.  The
+# easiest way is to get a list of all the stops on a route, and select
+# the stop number from that.  For instance, running "whenthebus
+# liststops 78" will produce a list of all stops on the 78 route,
+# along with their names.  Your stop number should be added to
+# the "inbound_stops" and/or "outbound_stops" variables, and if it's
+# not already present, the entire line of text corresponding to your
+# desired stop should be copied/pasted into the "stop_to_name" table,
+# just below.
+
+# To add more stops to this table, use the "whenthebus liststops NN"
+# command, then copy/paste the line(s) you're interested to the table
+# below.  Ordering in the table doesn't matter.
+declare -A stop_to_name=(
+    [2361]="Park Circle @ Eastern Ave"		# both directions
+
+    [2359]="Park Ave @ Cedar Ave (outbound)"	# outbound
+    [6218]="Park Ave @ Cedar Ave (downhill and across Park)"	# inbound
+
+    [12360]='Park Ave @ Park Circle (opp. firehouse)' # outbound
+    [6217]='Park Ave @ Park Circle (by firehouse)'    # inbound
+
+    [2358]="Arlington Service Rd @ Park Ave"		# outbound
+    [2326]="Belmont Service Rd @ Park Ave Shelter"	# inbound
+    [2331]="Belmont Service Rd @ Pleasant St"	# inbound
+
+    [20761]="Harvard Upper Busway @ Red Line"	# outbound
+    [141]="Alewife Station Busway"		# outbound
+    [2271]="Mass Ave @ Cameron (sleeping electric buses)"  # outbound
+    [2277]="Mass Ave opp. Lake St."	# outbound
+    [2283]="Mass Ave @ Mystic St."	# outbound
+)
+
+# Invoking whenthebus securely:
+#
+# One way to accomplish this is to make the output from this script
+# the the _only_ output available across a hard-coded socket
+# connection.
+#
+# On the webserver:
+#   $ cat whenthebus.cgi
+#   nc --recv-only someotherhost some-port
+#
+# On "someotherhost"
+#   $ cat whenthebus.server
+#   env -i /usr/bin/socat TCP-L:some-port,reuseaddr,fork \
+#    	SYSTEM:"/path/to/whenthebus -h"
+#
+# The above is only an example, and may or may not have been tested!
+#
+
+#
+# normally nothing below this line should need changing
+#
+
+me=${0##*/}
+whereami=${0%/*}
+
+usage()
+{
+    exec >&2
+    test "${1:-}" && echo $me: "$*"
+    cat <<EOF
+usage: $me [options] [inbound|outbound|liststops NN]
+    '$me' with no arguments lists inbound and outbound bus predictions
+	for the configured routes at the configured stops.  where no
+	prediction is available for a given route, the scheduled arrival
+	is shown instead.
+    '$me inbound' or '$me outbound' shows just that direction.
+    '$me liststops NN' lists all stops for bus route NN.  This is
+	very useful when adding stops to '$me'.
+    Options:
+	-l will show how much each prediction differs from its schedule.
+	-s will show only scheduled arrivals, rather than showing
+	    predictions if available.
+	-h will add http markup to the output, for display on the web.
+	-x enables full debug trace output
+EOF
+    exit 1
+}
+
+set -u
+
+no_predictions=;
+do_html=;
+do_beta=;
+do_latetimes=;
+max_time="&max_time=75"  # horizon cutoff for scheduled arrivals, in minutes
+
+while :
+do
+    case ${1:-} in
+    -x) # for debug
+	set -x
+	;;
+    -h) # for web access
+	do_html=1
+	;;
+    -b) # use beta server.  actually, toggle the default set above
+	test "$do_beta" && do_beta="" || do_beta=yes
+	;;
+    -l) # include early/late information
+	do_latetimes=1
+	;;
+    -s) # don't overlay schedule data with real-time predictions.
+	no_predictions=1  # FIXME: unimpl.
+	;;
+    -*) usage "unknown option $1"
+	;;
+    *)	break
+	;;
+    esac
+    shift
+done
+
+
+declare -A stop_to_name stop_text
+declare -A wantroutes
+
+api_init()
+{
+    # developer api key, published by MBTA, may change at any time
+    apikey="api_key=wX9NwuHnZU2ToO7GmGR9uw"
+
+    # if a file named "whenthebus.apikey" exists in the same location
+    # where this script was found, its contents will be used as the
+    # api key instead of the developer key set above.  see
+    # http://realtime.mbta.com/portal for information on getting your
+    # own key.
+    if [ -e $whereami/$me.apikey ]
+    then
+	
+	# not readable, or empty?
+	if ! key=$(cat $whereami/$me.apikey) || [ ! "$key" ]
+	then
+	    echo API key configuration error >&2
+	    exit 1
+	fi
+	apikey="api_key=$key"
+    fi
+
+    if [ "$do_beta" ]
+    then
+	apiv2="23.21.118.89/developer/api/v2.1"
+    else
+	apiv2="realtime.mbta.com/developer/api/v2"
+    fi
+
+    alerts="&include_service_alerts=true"
+    xml="&format=xml"
+}
+
+get_data()
+{
+    # retrieve and save the bus info
+    now=$SECONDS
+    if ! rawdata=$(wget -q -O - "$1")
+    then
+	exec >&2
+	echo Network or server error.
+	echo Repeating command for error visiblity:
+	wget -nv -O /dev/null "$1"
+	exit 1
+    fi
+
+    data=$(echo -n "$rawdata" | xml2 2>/dev/null | tosslines | tr '=' ' ')
+}
+
+tosslines()
+{
+    # remove some unneeded xml data from the stream while it's cheap to do so.
+    grep -v '@vehicle|@sch_dep_dt|@xxx_sch_arr_dt|@route_type|@mode_name|@direction_id|@stop_|alert_headers|@xmlns:'
+}
+
+sec2HM()
+{
+    # convert seconds-since-epoch to hh:mmAM/PM
+    if [ "$do_html" ]
+    then
+	date --date=@$1 +%I:%M%P | sed 's/^02/12/' |  sed 's/^0/\&nbsp;/'
+    else
+	date --date=@$1 +%l:%M%P
+    fi
+}
+
+sec2min()
+{
+    # convert seconds to minutes.
+    # the times aren't really accurate to the second anyway
+    echo $(( ($1 + 30)/60))
+    #echo $(( $1 / 60 ))
+    #if [ $1 -lt 90 ]
+    #then
+    #	echo ${1}s
+    #else
+    #	echo $(( $1 / 60 ))m$(( $1 % 60 ))s
+    #fi
+}
+
+save_stop_predictions()
+{
+    # do we have fresh data?
+    test "${trip_id:-}" || return  # no new data
+    # is this a route we're interested in?
+    test "${wantroutes[$route_id]:-}" || return
+    # is it going the direction we're interested in?
+    test $route_direction = $wantdir || return
+
+    # we accumulate the schedule and/or predictions, rather than
+    # printing them immediately, so that we can sort them into arrival
+    # time order.  otherwise they come out in order of route number. 
+    # to help with the sorting, we put the raw arrival time on the
+    # front of the line.  after sorting, we'll strip it off.
+    stop_text[$trip_id]="$trip_arrival${sp4}bus $route_id$sp2$(sec2HM $trip_arrival)"
+    if [ $sched_or_pred = predictions ]
+    then
+	stop_text_away[$trip_id]="$(sec2min $trip_away) min"
+    else
+	stop_text_away[$trip_id]="$(sec2min $((trip_arrival - now))) min (sched)"
+    fi
+    if [ "$do_latetimes" ]
+    then
+	delta=$(sec2min $((trip_arrival - trip_schedarrival)))
+	if ((delta < 0))
+	then
+	    desc="$delta min early"
+	elif ((delta > 0))
+	then
+	    desc="$delta min late"
+	else
+	    desc="on time"
+	fi
+	stop_text_late[$trip_id]="$desc"
+    fi
+    trip_id=;
+}
+
+get_stop_data()
+{
+    local stop=$1
+
+    if [ $sched_or_pred = predictions ]
+    then
+	test "$no_predictions" && return 0
+	get_data "http://$apiv2/${sched_or_pred}bystop?$apikey&stop=$stop$alerts$xml"
+    else
+	get_data "http://$apiv2/${sched_or_pred}bystop?$apikey&stop=$stop$max_time$xml"
+    fi
+}
+
+clear_stop_text()
+{
+    unset stop_text stop_text_away stop_text_late
+}
+
+create_stop_text()
+{
+    
+    # loop through all the path/value pairs we received.  we ignore
+    # most of them, and just assign local variables from the few we want.
+    #
+    # data nodes (or object "members") are indicated with an @ in their names.
+    # if a path contains no '@', then it's an object name.  these are
+    # included as terminators on objects, to separate them from the
+    # next similar object.
+    while read path value
+    do
+	: path is $path
+	: value is $value
+	case $path in
+	*/@*) # nodes
+	    case $path in
+	    /$sched_or_pred/mode/route/@route_id)
+		route_id=$value ;;   # route number
+	    /$sched_or_pred/mode/route/direction/@direction_name)
+		route_direction=$value ;;  # Inbound/Outbound
+	    /$sched_or_pred/mode/route/direction/trip/@trip_id)
+		trip_id=$value ;;   # the id of the trip
+	    /$sched_or_pred/mode/route/direction/trip/@trip_name)
+		trip_name=$value ;;   # the name of the trip
+	    /$sched_or_pred/mode/route/direction/trip/@trip_headsign)
+		trip_head=$value ;;   # the sign on the bus
+	    /$sched_or_pred/mode/route/direction/trip/@sch_arr_dt)
+		trip_schedarrival=$value  # arrival time
+		test $sched_or_pred = schedule && trip_arrival=$trip_schedarrival
+		;;
+	    /$sched_or_pred/mode/route/direction/trip/@pre_dt)
+		trip_arrival=$value ;;  # arrival time
+	    /$sched_or_pred/mode/route/direction/trip/@pre_away)
+		trip_away=$value ;;   # how many seconds to arrival
+
+	    # alerts maybe should be a second query
+	    # NB:  these are currently removed in tosslines
+	    /$sched_or_pred/alert_headers/@alert_id)
+		alert_id=$value ;;
+	    /$sched_or_pred/alert_headers/@alert_id)
+		alert_id=$value ;;
+	    /$sched_or_pred/alert_headers/@header_text)
+		alert_text=$value ;;
+	    /$sched_or_pred/alert_headers/@effect_name)
+		alert_effect=$value ;;
+	    esac
+	    ;;
+	*) # end-of-folder markers contain no @ symbols
+	    : saving at $path
+	    save_stop_predictions
+
+	    case $path in
+	    /$sched_or_pred/mode/route/direction)
+		route_direction=;   # clear the current route's direction
+		;;
+	    /$sched_or_pred/mode/route)
+		route_id=;	    # clear the current route id
+		route_direction=;   # clear the current route's direction
+		;;
+	    esac
+	    ;;
+	esac
+
+    done <<< "$data"
+
+    : saving at end
+    save_stop_predictions
+}
+
+emit_stop_text()
+{
+    nl
+    echo -n "${sp2}${stop_to_name[$stop]}"
+    nl
+
+    if [ "$do_html" ]
+    then
+	sednl='s/|/\n/g'
+    else
+	sednl='s/|/\n/g'
+    fi
+    set +u
+    if [ ${#stop_text[*]} != 0 ]
+    then
+	for x in "${!stop_text[@]}" 
+	do
+	    echo "${stop_text[$x]}${sp2}in ${stop_text_away[$x]}"
+	done |
+	# sort numerically by arrival time, then trim that time
+	    sort -n | sed -e 's/^[0-9]\+//'
+    else
+	echo -n "${sp4}none"
+	nl
+    fi
+    set -u
+}
+
+show_buses_by_stop()
+{
+
+    # this is all a bit cumbersome.  we do a request per stop, which
+    # returns all buses that will come to that stop in the near
+    # future.  we then have to filter that data, to only save the info
+    # for the bus routes/directions we're interested in.
+
+    clear_stop_text
+    for stop in $stops
+    do
+
+	# we submit our requests twice:  first we get the scheduled
+	# arrival times, then we overlay what we got with predictions.
+	for sched_or_pred in schedule predictions
+	do
+	    if get_stop_data $stop
+	    then
+		create_stop_text
+	    fi
+	done
+
+	emit_stop_text
+	clear_stop_text
+    done
+}
+
+set_routes()
+{
+    # set up an associative array which holds our route
+    unset wantroutes
+    for x
+    do
+	wantroutes[$x]=yes
+    done
+}
+
+
+show_stop_ids()
+{
+    local id name
+
+    while read path value
+    do
+	# echo $path $value
+	case $path in
+	*stop_id) id=$value ;;
+	*stop_name) name=$value ;;
+	*stop)
+	    echo "[$id]='$name'"
+	    ;;
+	esac
+    done <<< "$data"
+    echo "[$id]='$name'"
+}
+
+if [ "$do_html" ]
+then
+    html_header()
+    {
+	echo -e "Content-type:text/html\n\n"
+	echo "<title>whenthebus</title>"
+	echo "<body><html>"
+	echo '<r style="font-size:120%">'
+	echo "<pre>"
+    }
+
+    html_footer()
+    {
+	echo "</html></body>"
+    }
+
+    nl()
+    {
+	# echo "<br>"
+	echo
+    }
+
+    sp4="&nbsp;&nbsp;&nbsp;&nbsp; "
+    sp2="&nbsp;&nbsp; "
+
+else
+    html_footer()
+    {
+	:
+    }
+
+    html_header()
+    {
+	:
+    }
+
+    nl()
+    {
+	echo
+    }
+    sp4="    "
+    sp2="  "
+fi
+
+header()
+{
+    nl
+    nl
+    echo -n $wantdir, as of $(date +"%l:%M%P %b %e")
+    nl
+}
+
+do_inbound()
+{
+    wantdir=Inbound
+    set_routes $inbound_routes
+    stops="$inbound_stops"
+    header
+    show_buses_by_stop
+}
+
+do_outbound()
+{
+    wantdir=Outbound
+    set_routes $outbound_routes
+    stops="$outbound_stops"
+    header
+    show_buses_by_stop
+}
+
+api_init
+
+# fetch the server time, and set bash's internal clock ($SECONDS) to match
+get_data "http://$apiv2/servertime?$apikey$xml"
+servertime=$(sed -n -e 's/.*server_dt //p'  <<<"$data" )
+SECONDS=$servertime
+api_init
+
+case ${1:-} in
+routes)
+    # get a list of all MBTA routes.  not terribly useful
+    get_data "http://$apiv2/routes?$apikey$xml"
+    echo -n "$data" | less
+    exit
+    ;;
+
+liststops)
+    # get a list of all the stop names along a route
+    route=${2:-}
+    test "$route" || usage "missing route number"
+    echo stops on route $route
+    get_data "http://$apiv2/stopsbyroute?$apikey&route=$route$xml"
+    show_stop_ids | less
+    exit
+    ;;
+
+time)
+    # compare MBTA server time with local time, which should match. 
+    # regardless, the script reports all arrival times using the
+    # server time.
+    get_data "http://$apiv2/servertime?$apikey$xml"
+    servertime=$(sed -n -e 's/.*server_dt //p'  <<<"$data" )
+    echo "MBTA server says $servertime ($(date --date "@$servertime"))"
+    now=$(date +%s)
+    echo " local host says $now ($(date))"
+    echo difference: $((servertime - $(date +%s))) seconds
+    ;;
+
+test)
+    wantdir=Outbound
+    set_routes 77
+    stops="20761"
+    show_buses_by_stop
+    ;;
+
+out*) # "whenthebus outbound" will report only outbound buses
+    html_header
+    do_outbound
+    html_footer
+    ;;
+
+in*)  # "whenthebus inbound" will report only inbound buses
+    html_header
+    do_inbound
+    html_footer
+    ;;
+
+"") # report all buses
+    html_header
+    do_inbound
+    do_outbound
+    html_footer
+    ;;
+
+*)  usage
+    ;;
+
+esac
+
+exit
+----------------------------------------
+    Copyright (c) 2015, Paul G. Fox
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met: 
+
+    1.  Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer. 
+
+    2.  Redistributions in binary form must reproduce the above
+       copyright notice, this list of conditions and the following
+       disclaimer in the documentation and/or other materials provided
+       with the distribution. 
+
+    This software is provided by the copyright holders and
+    contributors "as is" and any express or implied warranties,
+    including, but not limited to, the implied warranties of
+    merchantability and fitness for a particular purpose are
+    disclaimed.  In no event shall the copyright owner or contributors
+    be liable for any direct, indirect, incidental, special,
+    exemplary, or consequential damages (including, but not limited
+    to, procurement of substitute goods or services; loss of use,
+    data, or profits; or business interruption) however caused and on
+    any theory of liability, whether in contract, strict liability, or
+    tort (including negligence or otherwise) arising in any way out of
+    the use of this software, even if advised of the possibility of
+    such damage.
