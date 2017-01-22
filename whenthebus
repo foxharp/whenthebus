@@ -33,25 +33,34 @@
 # These four variables configure the bus routes and bus stops that
 # you're interested in:
 
-inbound_routes="78 62 76 84"
+inbound_routes="78 62 76 627 84"		# 627 is the 62/76
 inbound_stops="2361 6217 6218 2326 2331"
-outbound_routes="78 62 76 84 77"
+outbound_routes="78 62 76 627 84 77"
 outbound_stops="20761 141 2271 2277 2283"
 
-# The values of "inbound_routes" and "outbound_routes" are obvious. 
-# Finding the inbound/outbound stop numbers is a little trickier.  The
-# easiest way is to get a list of all the stops on a route, and select
-# the stop number from that.  For instance, running "whenthebus
-# liststops 78" will produce a list of all stops on the 78 route,
-# along with their names.  Your stop number should be added to
-# the "inbound_stops" and/or "outbound_stops" variables, and if it's
-# not already present, the entire line of text corresponding to your
-# desired stop should be copied/pasted into the "stop_to_name" table,
-# just below.
+# The values of "inbound_routes" and "outbound_routes" are obvious for
+# most routes -- just use the route number directly.  If you use a bus
+# which sometimes has a split route number, like the 62 or 76 which
+# run on saturdays as the "62/76", you'll need to run "whenthebus routes"
+# to get a full list of bus routes, and find the numeric "routeid"
+# that corresponds to the split "route_name".  For the route_name
+# "62/76", for instance, the numeric route_id is 627.  Enter that
+# number in the "inbound_routes" and "outbound_routes" lists.
 
-# To add more stops to this table, use the "whenthebus liststops NN"
-# command, then copy/paste the line(s) you're interested to the table
-# below.  Ordering in the table doesn't matter.
+# To find the stop numbers, the easiest way is to get a list of all
+# the stops on a route, and select the stop number from that.  For
+# instance, running "whenthebus liststops 78" will produce a list of
+# all stops on the 78 route, along with their names.  Your stop number
+# should be added to the "inbound_stops" and/or "outbound_stops"
+# variables, and if it's not already present, the entire line of text
+# corresponding to your desired stop should be copied/pasted into the
+# "stop_to_name" table, just below.
+
+# To add more stops to the "stop_to_name" table, use the "whenthebus
+# liststops NN" command, then copy/paste the line(s) you're interested
+# to the table below.  Ordering in the table doesn't matter, and you
+# can change the description if you wish in order to be more
+# descriptive.
 declare -A stop_to_name=(
     [2361]="Park Circle @ Eastern Ave"		# both directions
 
