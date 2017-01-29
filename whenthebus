@@ -479,7 +479,7 @@ then
 	echo -e "Content-type:text/html\n\n"
 	echo "<title>whenthebus</title>"
 	echo "<body><html>"
-	echo '<r style="font-size:120%">'
+	echo '<r style="font-size:200%">'
 	echo "<pre>"
     }
 
@@ -523,8 +523,6 @@ fi
 
 header()
 {
-    nl
-    nl
     if [ "$date_arg" ]
     then
 	echo -n $wantdir, as of $date_arg
@@ -612,6 +610,7 @@ in*)  # "whenthebus inbound" will report only inbound buses
 "") # report all buses
     html_header
     do_inbound
+    nl; nl
     do_outbound
     html_footer
     ;;
