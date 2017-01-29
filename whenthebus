@@ -136,6 +136,7 @@ do_html=;
 do_beta=;
 do_latetimes=;
 max_time="&max_time=75"  # horizon cutoff for scheduled arrivals, in minutes
+date_time=;
 
 while :
 do
@@ -261,12 +262,13 @@ save_stop_predictions()
     # time order.  otherwise they come out in order of route number. 
     # to help with the sorting, we put the raw arrival time on the
     # front of the line.  after sorting, we'll strip it off.
-    stop_text[$trip_id]="$trip_arrival${sp4}bus $route_id$sp2$(sec2HM $trip_arrival)"
+    printf -v stop_text[$trip_id] "%s    bus %-5s %s" \
+	"$trip_arrival" "$route_name" "$(sec2HM $trip_arrival)"
     if [ $sched_or_pred = predictions ]
     then
-	stop_text_away[$trip_id]="$(sec2min $trip_away) min"
+	stop_text_away[$trip_id]="in $(sec2min $trip_away) min"
     else
-	stop_text_away[$trip_id]="$(sec2min $((trip_arrival - now))) min (sched)"
+	stop_text_away[$trip_id]="in $(sec2min $((trip_arrival - now))) min (sched)"
     fi
     if [ "$do_latetimes" ]
     then
@@ -294,7 +296,7 @@ get_stop_data()
 	test "$no_predictions" && return 0
 	get_data "http://$apiv2/${sched_or_pred}bystop?$apikey&stop=$stop$alerts$xml"
     else
-	get_data "http://$apiv2/${sched_or_pred}bystop?$apikey&stop=$stop$max_time$xml"
+	get_data "http://$apiv2/${sched_or_pred}bystop?$apikey&stop=$stop$date_time$max_time$xml"
     fi
 }
 
@@ -322,6 +324,8 @@ create_stop_text()
 	    case $path in
 	    /$sched_or_pred/mode/route/@route_id)
 		route_id=$value ;;   # route number
+	    /$sched_or_pred/mode/route/@route_name)
+		route_name=$value ;;   # route name
 	    /$sched_or_pred/mode/route/direction/@direction_name)
 		route_direction=$value ;;  # Inbound/Outbound
 	    /$sched_or_pred/mode/route/direction/trip/@trip_id)
@@ -361,6 +365,7 @@ create_stop_text()
 		;;
 	    /$sched_or_pred/mode/route)
 		route_id=;	    # clear the current route id
+		route_name=;	    # clear the current route name
 		route_direction=;   # clear the current route's direction
 		;;
 	    esac
@@ -376,26 +381,21 @@ create_stop_text()
 emit_stop_text()
 {
     nl
-    echo -n "${sp2}${stop_to_name[$stop]}"
+    echo -n "  ${stop_to_name[$stop]}"
     nl
 
-    if [ "$do_html" ]
-    then
-	sednl='s/|/\n/g'
-    else
-	sednl='s/|/\n/g'
-    fi
+    sednl='s/|/\n/g'
     set +u
     if [ ${#stop_text[*]} != 0 ]
     then
 	for x in "${!stop_text[@]}" 
 	do
-	    echo "${stop_text[$x]}${sp2}in ${stop_text_away[$x]}"
+	    echo "${stop_text[$x]}  ${stop_text_away[$x]}"
 	done |
-	# sort numerically by arrival time, then trim that time
+	    # sort numerically by arrival time, then trim that time
 	    sort -n | sed -e 's/^[0-9]\+//'
     else
-	echo -n "${sp4}none"
+	echo -n "    none"
 	nl
     fi
     set -u
@@ -423,7 +423,7 @@ show_buses_by_stop()
 	    fi
 	done
 
-	emit_stop_text
+	emit_stop_text | spaces
 	clear_stop_text
     done
 }
@@ -479,8 +479,10 @@ then
 	echo
     }
 
-    sp4="&nbsp;&nbsp;&nbsp;&nbsp; "
-    sp2="&nbsp;&nbsp; "
+    spaces()
+    {
+	sed 's/ /\&nbsp;/g'
+    }
 
 else
     html_footer()
@@ -497,8 +499,11 @@ else
     {
 	echo
     }
-    sp4="    "
-    sp2="  "
+
+    spaces()
+    {
+	cat
+    }
 fi
 
 header()
