@@ -121,8 +121,9 @@ usage: $me [options] [inbound|outbound|liststops NN]
 	very useful when adding stops to '$me'.
     Options:
 	-l will show how much each prediction differs from its schedule.
-	-s will show only scheduled arrivals, rather than showing
+	-s will show only *scheduled* arrivals, rather than showing
 	    predictions if available.
+	-t <datespec> will show the *scheduled* arrivals for the given time.
 	-h will add http markup to the output, for display on the web.
 	-x enables full debug trace output
 EOF
@@ -137,6 +138,7 @@ do_beta=;
 do_latetimes=;
 max_time="&max_time=75"  # horizon cutoff for scheduled arrivals, in minutes
 date_time=;
+date_arg=;
 
 while :
 do
@@ -151,10 +153,20 @@ do
 	test "$do_beta" && do_beta="" || do_beta=yes
 	;;
     -l) # include early/late information
+	echo "The -l option is unimplemented"
 	do_latetimes=1
 	;;
     -s) # don't overlay schedule data with real-time predictions.
 	no_predictions=1  # FIXME: unimpl.
+	;;
+    -t) # request schedule for some time in next week
+	date_arg="${2:-}"
+	test "$date_arg" || usage
+	date_epoch=$(date -d "$date_arg" +%s)
+	# fixme check result
+	date_time="&datetime=$date_epoch"
+	no_predictions=1
+	shift
 	;;
     -*) usage "unknown option $1"
 	;;
@@ -264,7 +276,10 @@ save_stop_predictions()
     # front of the line.  after sorting, we'll strip it off.
     printf -v stop_text[$trip_id] "%s    bus %-5s %s" \
 	"$trip_arrival" "$route_name" "$(sec2HM $trip_arrival)"
-    if [ $sched_or_pred = predictions ]
+    if [ "$date_arg" ]
+    then
+	:
+    elif [ $sched_or_pred = predictions ]
     then
 	stop_text_away[$trip_id]="in $(sec2min $trip_away) min"
     else
@@ -510,7 +525,12 @@ header()
 {
     nl
     nl
-    echo -n $wantdir, as of $(date +"%l:%M%P %b %e")
+    if [ "$date_arg" ]
+    then
+	echo -n $wantdir, as of $date_arg
+    else
+	echo -n $wantdir, as of $(date +"%l:%M%P %b %e")
+    fi
     nl
 }
 
