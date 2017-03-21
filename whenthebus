@@ -158,7 +158,7 @@ do
     -x) # for debug
 	set -x
 	;;
-    -h) # for web access
+    -html) # for web access
 	do_html=1
 	;;
     -b) # use beta server.  actually, toggle the default set above
