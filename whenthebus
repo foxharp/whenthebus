@@ -98,7 +98,7 @@ declare -A stop_to_name=(
 # On "someotherhost"
 #   $ cat whenthebus.server
 #   env -i /usr/bin/socat TCP-L:some-port,reuseaddr,fork \
-#    	SYSTEM:"/path/to/whenthebus -h"
+#    	SYSTEM:"/path/to/whenthebus -html"
 #
 # The above is only an example, and may or may not have been tested!
 #
@@ -128,7 +128,7 @@ usage: $me [options] [inbound|outbound|liststops NN]
 	-s will show only *scheduled* arrivals, rather than showing
 	    predictions if available.
 	-t <datespec> will show the *scheduled* arrivals for the given time.
-	-h will add http markup to the output, for display on the web.
+	-html will add http markup to the output, for display on the web.
 	-x enables full debug trace output
 EOF
     exit 1
