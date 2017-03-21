@@ -136,6 +136,14 @@ EOF
 
 set -u
 
+# be sure we have xml2 available. it's not normally installed,
+# but 'apt install xml2' will fetch it.
+if ! type xml2 >/dev/null
+then
+    echo "$0: can't find xml2" >/dev/null
+    exit
+fi
+
 no_predictions=;
 do_html=;
 do_beta=;
@@ -230,7 +238,8 @@ get_data()
 	exit 1
     fi
 
-    data=$(echo -n "$rawdata" | xml2 2>/dev/null | tosslines | tr '=' ' ')
+    # i used to discard stderr from xml2, here.  don't know why.
+    data=$(echo -n "$rawdata" | xml2 | tosslines | tr '=' ' ')
 }
 
 tosslines()
