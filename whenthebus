@@ -147,7 +147,7 @@ fi
 no_predictions=;
 do_html=;
 do_beta=;
-do_latetimes=;
+do_latetimes=1;
 max_time="&max_time=75"  # horizon cutoff for scheduled arrivals, in minutes
 date_time=;
 date_arg=;
@@ -165,11 +165,10 @@ do
 	test "$do_beta" && do_beta="" || do_beta=yes
 	;;
     -l) # include early/late information
-	echo "The -l option is unimplemented"
 	do_latetimes=1
 	;;
     -s) # don't overlay schedule data with real-time predictions.
-	no_predictions=1  # FIXME: unimpl.
+	no_predictions=1
 	;;
     -t) # request schedule for some time in next week
 	date_arg="${2:-}"
@@ -303,12 +302,12 @@ save_stop_predictions()
 	delta=$(sec2min $((trip_arrival - trip_schedarrival)))
 	if ((delta < 0))
 	then
-	    desc="$delta min early"
+	    desc="(early $((-1 * $delta)))"
 	elif ((delta > 0))
 	then
-	    desc="$delta min late"
+	    desc="(late $delta)"
 	else
-	    desc="on time"
+	    desc=""
 	fi
 	stop_text_late[$trip_id]="$desc"
     fi
@@ -418,7 +417,7 @@ emit_stop_text()
     then
 	for x in "${!stop_text[@]}" 
 	do
-	    echo "${stop_text[$x]}  ${stop_text_away[$x]}"
+	    echo "${stop_text[$x]}  ${stop_text_away[$x]} ${stop_text_late[$x]}"
 	done |
 	    # sort numerically by arrival time, then trim that time
 	    sort -n | sed -e 's/^[0-9]\+//'
