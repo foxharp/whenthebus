@@ -252,7 +252,7 @@ sec2HM()
     # convert seconds-since-epoch to hh:mmAM/PM
     if [ "$do_html" ]
     then
-	date --date=@$1 +%I:%M%P | sed 's/^02/12/' |  sed 's/^0/\&nbsp;/'
+	date --date=@$1 +%I:%M%P | sed 's/^0/\&nbsp;/'
     else
 	date --date=@$1 +%l:%M%P
     fi
